@@ -1,8 +1,9 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Header
+from fastapi import FastAPI, Depends, HTTPException, status, Header, WebSocket, WebSocketDisconnect, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import exc
 from typing import List
+from datetime import datetime
 import uvicorn
 
 from . import models, schemas
@@ -10,19 +11,61 @@ from .database import get_db, engine, Base
 
 from fastapi.middleware.cors import CORSMiddleware
 
-from fastapi import FastAPI, Depends, HTTPException, status, Header
-
 async def verify_api_key(x_api_key: str = Header("dev-secret-key")):
-    if x_api_key != "dev-secret-key":
+    if x_api_key != "dev-secret-key" and x_api_key != "dev-admin-key":
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return x_api_key
+
+async def verify_admin(x_api_key: str = Header("dev-admin-key")):
+    if x_api_key != "dev-admin-key":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    return x_api_key
+
+RATE_LIMIT = {}
+async def rate_limit(request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    now = datetime.now()
+    if client_ip not in RATE_LIMIT:
+        RATE_LIMIT[client_ip] = []
+    RATE_LIMIT[client_ip] = [t for t in RATE_LIMIT[client_ip] if (now - t).total_seconds() < 60]
+    if len(RATE_LIMIT[client_ip]) > 100:
+        raise HTTPException(status_code=429, detail="Too Many Requests")
+    RATE_LIMIT[client_ip].append(now)
 
 app = FastAPI(
     title="Distributed Job Scheduler API",
     description="Peak engineering job scheduler API with atomic claiming and robust retry mechanics.",
     version="1.0.0",
-    dependencies=[Depends(verify_api_key)]
+    dependencies=[Depends(verify_api_key), Depends(rate_limit)]
 )
+
+active_websockets: List[WebSocket] = []
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    active_websockets.append(websocket)
+    try:
+        while True:
+            # Keep connection alive
+            data = await websocket.receive_text()
+    except WebSocketDisconnect:
+        active_websockets.remove(websocket)
+
+from pydantic import BaseModel
+class WebhookPayload(BaseModel):
+    job_id: str
+    status: str
+
+@app.post("/internal/webhook/")
+async def internal_webhook(payload: WebhookPayload):
+    # Broadcast to all connected clients
+    for ws in active_websockets:
+        try:
+            await ws.send_json(payload.model_dump())
+        except:
+            pass
+    return {"message": "Broadcasted"}
 
 app.add_middleware(
     CORSMiddleware,
@@ -140,7 +183,7 @@ async def enqueue_batch_jobs(jobs: List[schemas.JobCreate], db: AsyncSession = D
         await db.rollback()
         raise HTTPException(status_code=400, detail="Queue not found for one or more jobs")
 
-@app.post("/queues/{queue_id}/pause")
+@app.post("/queues/{queue_id}/pause", dependencies=[Depends(verify_admin)])
 async def pause_queue(queue_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(models.Queue).filter(models.Queue.id == queue_id))
     queue = result.scalars().first()
@@ -150,7 +193,7 @@ async def pause_queue(queue_id: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {"message": "Queue paused"}
 
-@app.post("/queues/{queue_id}/resume")
+@app.post("/queues/{queue_id}/resume", dependencies=[Depends(verify_admin)])
 async def resume_queue(queue_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(models.Queue).filter(models.Queue.id == queue_id))
     queue = result.scalars().first()

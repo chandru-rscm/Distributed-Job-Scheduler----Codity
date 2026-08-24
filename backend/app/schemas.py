@@ -10,6 +10,8 @@ class JobCreate(BaseModel):
     priority: int = 0
     scheduled_at: Optional[datetime] = None
     cron_expression: Optional[str] = None
+    parent_job_id: Optional[str] = None
+    shard_key: str = "shard-0"
     max_retries: int = 3
     backoff_strategy: BackoffStrategy = BackoffStrategy.EXPONENTIAL
 
@@ -28,6 +30,7 @@ class QueueCreate(BaseModel):
     project_id: str
     name: str
     concurrency_limit: int = 10
+    shard_key: str = "shard-0"
     default_max_retries: int = 3
 
 class QueueResponse(QueueCreate):
@@ -41,6 +44,7 @@ class QueueResponse(QueueCreate):
 class ProjectCreate(BaseModel):
     organization_id: str
     name: str
+    webhook_url: Optional[str] = None
 
 class ProjectResponse(ProjectCreate):
     id: str

@@ -27,6 +27,7 @@ class User(Base):
     id = Column(String, primary_key=True, default=generate_uuid)
     email = Column(String, unique=True, nullable=False)
     hashed_password = Column(String, nullable=False)
+    role = Column(String, default="USER") # ADMIN, USER
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     organizations = relationship("Organization", back_populates="owner")
 
@@ -45,6 +46,7 @@ class Project(Base):
     id = Column(String, primary_key=True, default=generate_uuid)
     organization_id = Column(String, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     name = Column(String, nullable=False)
+    webhook_url = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     organization = relationship("Organization", back_populates="projects")
     queues = relationship("Queue", back_populates="project", cascade="all, delete-orphan")
@@ -56,6 +58,7 @@ class Queue(Base):
     name = Column(String, nullable=False)
     concurrency_limit = Column(Integer, default=10)
     is_paused = Column(Boolean, default=False)
+    shard_key = Column(String, default="shard-0")
     default_max_retries = Column(Integer, default=3)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     project = relationship("Project", back_populates="queues")
@@ -76,6 +79,8 @@ class Job(Base):
     __tablename__ = "jobs"
     id = Column(String, primary_key=True, default=generate_uuid)
     queue_id = Column(String, ForeignKey("queues.id", ondelete="CASCADE"), nullable=False)
+    parent_job_id = Column(String, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True)
+    shard_key = Column(String, default="shard-0")
     name = Column(String, nullable=False)
     payload = Column(JSON, nullable=False)
     status = Column(Enum(JobStatus), default=JobStatus.QUEUED, nullable=False)
@@ -110,5 +115,6 @@ class JobExecution(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
     logs = Column(Text, nullable=True)
     error_message = Column(Text, nullable=True)
+    ai_summary = Column(Text, nullable=True)
     
     job = relationship("Job", back_populates="executions")

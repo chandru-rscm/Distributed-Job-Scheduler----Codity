@@ -36,8 +36,23 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 5000); // Poll every 5s
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      fetch('http://127.0.0.1:8000/workers/', { headers: getHeaders() })
+        .then(res => res.json())
+        .then(data => setWorkers(data))
+        .catch(() => {});
+    }, 5000);
+
+    const ws = new WebSocket('ws://127.0.0.1:8000/ws');
+    ws.onmessage = (event) => {
+      // Real-time updates trigger a fresh data fetch
+      fetchData();
+    };
+
+    return () => {
+      clearInterval(interval);
+      ws.close();
+    };
   }, []);
 
   const handleCreateQueue = async (e: React.FormEvent) => {
@@ -327,6 +342,12 @@ export default function Dashboard() {
                     </div>
                     {log.logs && <pre style={{background: 'rgba(0,0,0,0.5)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.875rem', marginTop: '0.5rem'}}>{log.logs}</pre>}
                     {log.error_message && <pre style={{color: '#ff4d4f', background: 'rgba(255,77,79,0.1)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.875rem', marginTop: '0.5rem'}}>{log.error_message}</pre>}
+                    {log.ai_summary && (
+                      <div style={{marginTop: '0.75rem', padding: '0.75rem', background: 'linear-gradient(90deg, rgba(138,43,226,0.1) 0%, rgba(0,212,255,0.1) 100%)', borderLeft: '4px solid #8a2be2', borderRadius: '4px'}}>
+                        <strong>🤖 AI Summary:</strong>
+                        <p style={{marginTop: '0.25rem', fontSize: '0.875rem'}}>{log.ai_summary}</p>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

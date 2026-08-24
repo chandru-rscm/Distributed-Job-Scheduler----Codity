@@ -3,6 +3,8 @@ import os
 import socket
 import signal
 import sys
+import argparse
+import aiohttp
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -14,6 +16,11 @@ from app.models import Job, JobStatus, Worker, JobExecution, BackoffStrategy
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--shard", default="shard-0", help="Shard key to poll for")
+args, unknown = parser.parse_known_args()
+SHARD_KEY = args.shard
 
 hostname = socket.gethostname()
 shutdown_event = asyncio.Event()
@@ -63,13 +70,17 @@ async def claim_job(db: AsyncSession, worker_id: str):
             WHERE j.status IN ('QUEUED', 'SCHEDULED')
               AND j.scheduled_at <= NOW()
               AND q.is_paused = FALSE
+              AND j.shard_key = :shard_key
+              AND (j.parent_job_id IS NULL OR EXISTS (
+                  SELECT 1 FROM jobs p WHERE p.id = j.parent_job_id AND p.status = 'COMPLETED'
+              ))
             ORDER BY j.priority DESC, j.scheduled_at ASC
             FOR UPDATE SKIP LOCKED
             LIMIT 1
         )
         RETURNING id, name, payload, retry_count, max_retries, backoff_strategy;
     """)
-    result = await db.execute(query, {"worker_id": worker_id})
+    result = await db.execute(query, {"worker_id": worker_id, "shard_key": SHARD_KEY})
     job = result.fetchone()
     await db.commit()
     return job
@@ -81,11 +92,23 @@ async def execute_job(job):
         raise Exception("Simulated failure")
     return "Job completed successfully"
 
+async def send_webhook(job_id: str, status: str):
+    try:
+        async with aiohttp.ClientSession() as session:
+            await session.post("http://127.0.0.1:8000/internal/webhook/", json={"job_id": job_id, "status": status})
+    except:
+        pass
+
+def generate_ai_summary(error_msg: str) -> str:
+    # Simulated AI call
+    return f"AI Diagnosis: Job failed due to '{error_msg}'. Recommendation: Verify external service availability or payload structure."
+
 async def handle_job(worker_id: str, job):
     try:
         async with AsyncSessionLocal() as db:
-            logger.info(f"Worker {worker_id} claimed job {job.id}")
+            logger.info(f"Worker {worker_id} claimed job {job.id} on {SHARD_KEY}")
             await db.execute(update(Job).where(Job.id == job.id).values(status='RUNNING'))
+            await send_webhook(job.id, "RUNNING")
             
             execution = JobExecution(
                 job_id=job.id,
@@ -103,6 +126,7 @@ async def handle_job(worker_id: str, job):
                 execution.logs = result_msg
                 await db.execute(update(Job).where(Job.id == job.id).values(status='COMPLETED'))
                 await db.commit()
+                await send_webhook(job.id, "COMPLETED")
             except Exception as e:
                 execution.status = "FAILED"
                 execution.completed_at = datetime.now(timezone.utc)
@@ -111,7 +135,9 @@ async def handle_job(worker_id: str, job):
                 new_retry_count = job.retry_count + 1
                 if new_retry_count >= job.max_retries:
                     await db.execute(update(Job).where(Job.id == job.id).values(status='DLQ'))
+                    execution.ai_summary = generate_ai_summary(str(e))
                     logger.error(f"Job {job.id} failed permanently (DLQ)")
+                    await send_webhook(job.id, "DLQ")
                 else:
                     # Configurable Backoff Strategy
                     base_delay = 5
@@ -130,6 +156,7 @@ async def handle_job(worker_id: str, job):
                         worker_id=None
                     ))
                     logger.warning(f"Job {job.id} failed, retry {new_retry_count}/{job.max_retries} scheduled for {delay}s from now.")
+                    await send_webhook(job.id, "QUEUED")
                 await db.commit()
     except Exception as e:
         logger.error(f"Job handling error: {e}")
