@@ -12,6 +12,9 @@ export default function Dashboard() {
   const [newQueueName, setNewQueueName] = useState('');
   const [selectedJobLogs, setSelectedJobLogs] = useState<any[] | null>(null);
 
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000/ws';
+
   const getHeaders = () => ({
     'Content-Type': 'application/json',
     'dev-secret-key': 'dev-secret-key'
@@ -20,9 +23,9 @@ export default function Dashboard() {
   const fetchData = async () => {
     try {
       const [jobsRes, queuesRes, workersRes] = await Promise.all([
-        fetch('http://127.0.0.1:8000/jobs/', { headers: getHeaders() }),
-        fetch('http://127.0.0.1:8000/queues/', { headers: getHeaders() }),
-        fetch('http://127.0.0.1:8000/workers/', { headers: getHeaders() })
+        fetch(`${API_URL}/jobs/`, { headers: getHeaders() }),
+        fetch(`${API_URL}/queues/`, { headers: getHeaders() }),
+        fetch(`${API_URL}/workers/`, { headers: getHeaders() })
       ]);
       if (jobsRes.ok) setJobs(await jobsRes.json());
       if (queuesRes.ok) setQueues(await queuesRes.json());
@@ -37,13 +40,13 @@ export default function Dashboard() {
   useEffect(() => {
     fetchData();
     const interval = setInterval(() => {
-      fetch('http://127.0.0.1:8000/workers/', { headers: getHeaders() })
+      fetch(`${API_URL}/workers/`, { headers: getHeaders() })
         .then(res => res.json())
         .then(data => setWorkers(data))
         .catch(() => {});
     }, 5000);
 
-    const ws = new WebSocket('ws://127.0.0.1:8000/ws');
+    const ws = new WebSocket(WS_URL);
     ws.onmessage = (event) => {
       // Real-time updates trigger a fresh data fetch
       fetchData();
@@ -57,9 +60,9 @@ export default function Dashboard() {
 
   const handleCreateQueue = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newQueueName) return;
+    if (!newQueueName.trim()) return;
     try {
-      await fetch('http://127.0.0.1:8000/queues/', {
+      await fetch(`${API_URL}/queues/`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ 
@@ -75,13 +78,10 @@ export default function Dashboard() {
     }
   };
 
-  const handleCreateJob = async () => {
-    if (queues.length === 0) {
-      alert("Please create a queue first!");
-      return;
-    }
+  const handleEnqueue = async () => {
+    if (queues.length === 0) return alert("Create a queue first!");
     try {
-      await fetch('http://127.0.0.1:8000/jobs/', {
+      await fetch(`${API_URL}/jobs/`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ 
@@ -99,7 +99,7 @@ export default function Dashboard() {
 
   const handleRetry = async (jobId: string) => {
     try {
-      await fetch(`http://127.0.0.1:8000/jobs/${jobId}/retry`, {
+      await fetch(`${API_URL}/jobs/${jobId}/retry`, {
         method: 'POST',
         headers: getHeaders()
       });
@@ -112,7 +112,7 @@ export default function Dashboard() {
   const togglePause = async (queueId: string, currentlyPaused: boolean) => {
     try {
       const action = currentlyPaused ? 'resume' : 'pause';
-      await fetch(`http://127.0.0.1:8000/queues/${queueId}/${action}`, {
+      await fetch(`${API_URL}/queues/${queueId}/${action}`, {
         method: 'POST',
         headers: getHeaders()
       });
@@ -124,7 +124,7 @@ export default function Dashboard() {
 
   const fetchJobLogs = async (jobId: string) => {
     try {
-      const res = await fetch(`http://127.0.0.1:8000/jobs/${jobId}/executions`, { headers: getHeaders() });
+      const res = await fetch(`${API_URL}/jobs/${jobId}/executions`, { headers: getHeaders() });
       if (res.ok) setSelectedJobLogs(await res.json());
     } catch (err) {
       console.error(err);
@@ -146,7 +146,7 @@ export default function Dashboard() {
         </div>
         
         <div className="header-actions">
-          <button className="btn" onClick={handleCreateJob}>+ Enqueue Test Job</button>
+          <button className="btn" onClick={handleEnqueue}>+ Enqueue Test Job</button>
           <div className="glass-panel" style={{ padding: '0.5rem 1rem' }}>
             <span className="status-online">● System Online</span>
           </div>
