@@ -7,17 +7,25 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('overview');
   const [jobs, setJobs] = useState<any[]>([]);
   const [queues, setQueues] = useState<any[]>([]);
+  const [workers, setWorkers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [newQueueName, setNewQueueName] = useState('');
 
+  const getHeaders = () => ({
+    'Content-Type': 'application/json',
+    'dev-secret-key': 'dev-secret-key'
+  });
+
   const fetchData = async () => {
     try {
-      const [jobsRes, queuesRes] = await Promise.all([
-        fetch('http://127.0.0.1:8000/jobs/'),
-        fetch('http://127.0.0.1:8000/queues/')
+      const [jobsRes, queuesRes, workersRes] = await Promise.all([
+        fetch('http://127.0.0.1:8000/jobs/', { headers: getHeaders() }),
+        fetch('http://127.0.0.1:8000/queues/', { headers: getHeaders() }),
+        fetch('http://127.0.0.1:8000/workers/', { headers: getHeaders() })
       ]);
       if (jobsRes.ok) setJobs(await jobsRes.json());
       if (queuesRes.ok) setQueues(await queuesRes.json());
+      if (workersRes.ok) setWorkers(await workersRes.json());
     } catch (err) {
       console.error("Failed to fetch data", err);
     } finally {
@@ -37,7 +45,7 @@ export default function Dashboard() {
     try {
       await fetch('http://127.0.0.1:8000/queues/', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getHeaders(),
         body: JSON.stringify({ 
           project_id: "default", 
           name: newQueueName,
@@ -59,13 +67,38 @@ export default function Dashboard() {
     try {
       await fetch('http://127.0.0.1:8000/jobs/', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getHeaders(),
         body: JSON.stringify({ 
           queue_id: queues[0].id, 
           name: "demo_task_" + Math.floor(Math.random() * 1000),
-          payload: { test: true },
+          payload: { fail_me: Math.random() > 0.7 },
           priority: 1
         })
+      });
+      fetchData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleRetry = async (jobId: string) => {
+    try {
+      await fetch(`http://127.0.0.1:8000/jobs/${jobId}/retry`, {
+        method: 'POST',
+        headers: getHeaders()
+      });
+      fetchData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const togglePause = async (queueId: string, currentlyPaused: boolean) => {
+    try {
+      const action = currentlyPaused ? 'resume' : 'pause';
+      await fetch(`http://127.0.0.1:8000/queues/${queueId}/${action}`, {
+        method: 'POST',
+        headers: getHeaders()
       });
       fetchData();
     } catch (err) {
@@ -139,11 +172,12 @@ export default function Dashboard() {
                 <div className="table-container">
                   <table className="jobs-table">
                     <thead>
-                      <tr>
+                        <tr>
                         <th>Job ID</th>
                         <th>Name</th>
                         <th>Status</th>
                         <th>Created At</th>
+                        <th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -155,10 +189,15 @@ export default function Dashboard() {
                             <span className={`status-badge status-${job.status.toLowerCase()}`}>{job.status}</span>
                           </td>
                           <td className="text-muted">{new Date(job.created_at).toLocaleTimeString()}</td>
+                          <td>
+                            {(job.status === 'FAILED' || job.status === 'DLQ') && (
+                              <button onClick={() => handleRetry(job.id)} className="btn" style={{padding: '0.25rem 0.5rem', fontSize: '0.75rem'}}>Retry</button>
+                            )}
+                          </td>
                         </tr>
                       ))}
                       {jobs.length === 0 && !loading && (
-                        <tr><td colSpan={4} style={{textAlign: 'center', color: '#888'}}>No jobs found. Click "Enqueue Test Job"</td></tr>
+                        <tr><td colSpan={5} style={{textAlign: 'center', color: '#888'}}>No jobs found. Click "Enqueue Test Job"</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -188,7 +227,12 @@ export default function Dashboard() {
                 <div className="stats-grid">
                   {queues.map(q => (
                     <div key={q.id} className="glass-panel stat-card" style={{ background: 'rgba(255,255,255,0.02)' }}>
-                      <h3>{q.name}</h3>
+                      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                        <h3>{q.name} {q.is_paused && <span className="text-danger">(Paused)</span>}</h3>
+                        <button onClick={() => togglePause(q.id, q.is_paused)} className="btn" style={{padding: '0.25rem 0.5rem', fontSize: '0.75rem'}}>
+                          {q.is_paused ? 'Resume' : 'Pause'}
+                        </button>
+                      </div>
                       <div className="stat-value text-accent">{q.concurrency_limit}</div>
                       <div className="stat-change text-muted">Max Concurrency</div>
                     </div>
@@ -232,11 +276,23 @@ export default function Dashboard() {
           )}
 
           {activeTab === 'workers' && (
-            <div className="glass-panel fade-in" style={{ height: '400px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '48px', opacity: 0.2, marginBottom: '1rem' }}>⚙️</div>
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 500, marginBottom: '0.5rem' }}>Worker Fleet</h3>
-                <p className="text-muted">Run `python app/worker.py` in your backend terminal to see live workers here!</p>
+            <div className="glass-panel fade-in">
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '1.5rem' }}>Worker Fleet</h2>
+              <div className="stats-grid">
+                {workers.map(w => (
+                  <div key={w.id} className="glass-panel stat-card" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                    <h3>{w.hostname}</h3>
+                    <div className="stat-value text-success">{w.status}</div>
+                    <div className="stat-change text-muted">Last seen: {new Date(w.last_heartbeat).toLocaleTimeString()}</div>
+                  </div>
+                ))}
+                {workers.length === 0 && (
+                  <div style={{ textAlign: 'center', gridColumn: '1 / -1', padding: '2rem' }}>
+                    <div style={{ fontSize: '48px', opacity: 0.2, marginBottom: '1rem' }}>⚙️</div>
+                    <h3 style={{ fontSize: '1.25rem', fontWeight: 500, marginBottom: '0.5rem' }}>No active workers</h3>
+                    <p className="text-muted">Run `python -m app.worker` in your backend terminal to see live workers here!</p>
+                  </div>
+                )}
               </div>
             </div>
           )}

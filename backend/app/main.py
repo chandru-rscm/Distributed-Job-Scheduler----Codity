@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import exc
@@ -10,10 +10,18 @@ from .database import get_db, engine, Base
 
 from fastapi.middleware.cors import CORSMiddleware
 
+from fastapi import FastAPI, Depends, HTTPException, status, Header
+
+async def verify_api_key(x_api_key: str = Header("dev-secret-key")):
+    if x_api_key != "dev-secret-key":
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    return x_api_key
+
 app = FastAPI(
     title="Distributed Job Scheduler API",
     description="Peak engineering job scheduler API with atomic claiming and robust retry mechanics.",
-    version="1.0.0"
+    version="1.0.0",
+    dependencies=[Depends(verify_api_key)]
 )
 
 app.add_middleware(
@@ -94,3 +102,60 @@ async def list_jobs(db: AsyncSession = Depends(get_db), limit: int = 20):
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+@app.post("/jobs/batch", response_model=List[schemas.JobResponse], status_code=status.HTTP_201_CREATED)
+async def enqueue_batch_jobs(jobs: List[schemas.JobCreate], db: AsyncSession = Depends(get_db)):
+    db_jobs = []
+    for job in jobs:
+        db_job = models.Job(**job.model_dump())
+        if job.scheduled_at:
+            db_job.status = models.JobStatus.SCHEDULED
+        db.add(db_job)
+        db_jobs.append(db_job)
+    try:
+        await db.commit()
+        for job in db_jobs:
+            await db.refresh(job)
+        return db_jobs
+    except exc.IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="Queue not found for one or more jobs")
+
+@app.post("/queues/{queue_id}/pause")
+async def pause_queue(queue_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(models.Queue).filter(models.Queue.id == queue_id))
+    queue = result.scalars().first()
+    if not queue:
+        raise HTTPException(status_code=404, detail="Queue not found")
+    queue.is_paused = True
+    await db.commit()
+    return {"message": "Queue paused"}
+
+@app.post("/queues/{queue_id}/resume")
+async def resume_queue(queue_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(models.Queue).filter(models.Queue.id == queue_id))
+    queue = result.scalars().first()
+    if not queue:
+        raise HTTPException(status_code=404, detail="Queue not found")
+    queue.is_paused = False
+    await db.commit()
+    return {"message": "Queue resumed"}
+
+@app.post("/jobs/{job_id}/retry")
+async def retry_failed_job(job_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(models.Job).filter(models.Job.id == job_id))
+    job = result.scalars().first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status not in (models.JobStatus.FAILED, models.JobStatus.DLQ):
+        raise HTTPException(status_code=400, detail="Only FAILED or DLQ jobs can be retried")
+    job.status = models.JobStatus.QUEUED
+    job.retry_count = 0
+    job.worker_id = None
+    await db.commit()
+    return {"message": "Job successfully queued for retry"}
+
+@app.get("/workers/")
+async def list_workers(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(models.Worker))
+    return result.scalars().all()
