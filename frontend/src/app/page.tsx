@@ -10,6 +10,7 @@ export default function Dashboard() {
   const [workers, setWorkers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [newQueueName, setNewQueueName] = useState('');
+  const [selectedJobLogs, setSelectedJobLogs] = useState<any[] | null>(null);
 
   const getHeaders = () => ({
     'Content-Type': 'application/json',
@@ -106,6 +107,15 @@ export default function Dashboard() {
     }
   };
 
+  const fetchJobLogs = async (jobId: string) => {
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/jobs/${jobId}/executions`, { headers: getHeaders() });
+      if (res.ok) setSelectedJobLogs(await res.json());
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   return (
     <div className="dashboard-container">
       <Head>
@@ -189,7 +199,8 @@ export default function Dashboard() {
                             <span className={`status-badge status-${job.status.toLowerCase()}`}>{job.status}</span>
                           </td>
                           <td className="text-muted">{new Date(job.created_at).toLocaleTimeString()}</td>
-                          <td>
+                          <td style={{display: 'flex', gap: '0.5rem'}}>
+                            <button onClick={() => fetchJobLogs(job.id)} className="btn" style={{padding: '0.25rem 0.5rem', fontSize: '0.75rem'}}>Logs</button>
                             {(job.status === 'FAILED' || job.status === 'DLQ') && (
                               <button onClick={() => handleRetry(job.id)} className="btn" style={{padding: '0.25rem 0.5rem', fontSize: '0.75rem'}}>Retry</button>
                             )}
@@ -293,6 +304,31 @@ export default function Dashboard() {
                     <p className="text-muted">Run `python -m app.worker` in your backend terminal to see live workers here!</p>
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {selectedJobLogs && (
+            <div style={{
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
+              background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+            }}>
+              <div className="glass-panel" style={{ width: '800px', maxHeight: '80vh', overflowY: 'auto' }}>
+                <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '1rem'}}>
+                  <h2 style={{ fontSize: '1.25rem', fontWeight: 600 }}>Execution Logs</h2>
+                  <button onClick={() => setSelectedJobLogs(null)} className="btn" style={{padding: '0.25rem 0.5rem'}}>Close</button>
+                </div>
+                {selectedJobLogs.length === 0 ? <p className="text-muted">No execution logs found.</p> : null}
+                {selectedJobLogs.map((log, i) => (
+                  <div key={i} style={{marginBottom: '1rem', padding: '1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px'}}>
+                    <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem'}}>
+                      <span className={`status-badge status-${log.status.toLowerCase()}`}>{log.status}</span>
+                      <span className="text-muted">{new Date(log.started_at).toLocaleString()}</span>
+                    </div>
+                    {log.logs && <pre style={{background: 'rgba(0,0,0,0.5)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.875rem', marginTop: '0.5rem'}}>{log.logs}</pre>}
+                    {log.error_message && <pre style={{color: '#ff4d4f', background: 'rgba(255,77,79,0.1)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.875rem', marginTop: '0.5rem'}}>{log.error_message}</pre>}
+                  </div>
+                ))}
               </div>
             </div>
           )}

@@ -95,8 +95,27 @@ async def get_job(job_id: str, db: AsyncSession = Depends(get_db)):
     return job
 
 @app.get("/jobs/", response_model=List[schemas.JobResponse])
-async def list_jobs(db: AsyncSession = Depends(get_db), limit: int = 20):
-    result = await db.execute(select(models.Job).order_by(models.Job.created_at.desc()).limit(limit))
+async def list_jobs(
+    db: AsyncSession = Depends(get_db), 
+    skip: int = 0,
+    limit: int = 20,
+    status: str = None
+):
+    query = select(models.Job).order_by(models.Job.created_at.desc())
+    if status:
+        query = query.filter(models.Job.status == status)
+    
+    query = query.offset(skip).limit(limit)
+    result = await db.execute(query)
+    return result.scalars().all()
+
+@app.get("/jobs/{job_id}/executions")
+async def get_job_executions(job_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(models.JobExecution)
+        .filter(models.JobExecution.job_id == job_id)
+        .order_by(models.JobExecution.started_at.desc())
+    )
     return result.scalars().all()
 
 @app.get("/health")

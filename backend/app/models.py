@@ -22,11 +22,22 @@ class BackoffStrategy(str, enum.Enum):
     LINEAR = "LINEAR"
     EXPONENTIAL = "EXPONENTIAL"
 
+class User(Base):
+    __tablename__ = "users"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    email = Column(String, unique=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    organizations = relationship("Organization", back_populates="owner")
+
 class Organization(Base):
     __tablename__ = "organizations"
     id = Column(String, primary_key=True, default=generate_uuid)
     name = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    owner_id = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    
+    owner = relationship("User", back_populates="organizations")
     projects = relationship("Project", back_populates="organization", cascade="all, delete-orphan")
 
 class Project(Base):
