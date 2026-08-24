@@ -7,8 +7,8 @@ from sqlalchemy.future import select
 from sqlalchemy import text, update
 import logging
 
-from .database import AsyncSessionLocal, engine
-from .models import Job, JobStatus, Worker, JobExecution
+from app.database import AsyncSessionLocal, engine
+from app.models import Job, JobStatus, Worker, JobExecution
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
