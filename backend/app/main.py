@@ -8,10 +8,20 @@ import uvicorn
 from . import models, schemas
 from .database import get_db, engine, Base
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="Distributed Job Scheduler API",
     description="Peak engineering job scheduler API with atomic claiming and robust retry mechanics.",
     version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # API Endpoints for Organization, Project, Queue, Job
@@ -75,6 +85,11 @@ async def get_job(job_id: str, db: AsyncSession = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+@app.get("/jobs/", response_model=List[schemas.JobResponse])
+async def list_jobs(db: AsyncSession = Depends(get_db), limit: int = 20):
+    result = await db.execute(select(models.Job).order_by(models.Job.created_at.desc()).limit(limit))
+    return result.scalars().all()
 
 @app.get("/health")
 async def health_check():
